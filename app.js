@@ -649,8 +649,7 @@ function generateResumo(day, ev){
     linhas.push(`MACA RETIDA ${prep} ${cargo}${nomeTxt ? " " + nomeTxt : ""} em ${dt}`);
   }
 
-  return linhas.join("
-");
+return linhas.join("\n");
 }
 
 function renderEval(app, dayId, evId){
