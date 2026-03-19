@@ -14,10 +14,73 @@ function nowLocalISODateTime(){
 }
 function formatDateTimeBR(isoDT){
   if(!isoDT) return "";
-  const [date,time]=isoDT.split("T");
-  return `${formatDateBR(date)} ${time}`;
+  const [date,time]=String(isoDT).split("T");
+  return `${formatDateBR(date)} ${String(time||"").slice(0,5)}`;
+}
+function formatTimeBR(isoDT){
+  if(!isoDT) return "";
+  const [,time=""] = String(isoDT).split("T");
+  return String(time).slice(0,5);
+}
+function toLocalISODateTimeFromTimestamp(ts){
+  if(!ts) return "";
+  const d = new Date(ts);
+  if(Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 function onlyDigits(s=""){ return String(s).replace(/\D+/g,""); }
+function sanitizeInteger(value="", maxLen=30){
+  return onlyDigits(value).slice(0, maxLen);
+}
+function sanitizeDecimal(value="", maxLen=6){
+  let cleaned = String(value||"").replace(/[^\d.,]/g, "");
+  const match = cleaned.match(/[.,]/);
+  if(match){
+    const idx = match.index;
+    cleaned = cleaned.slice(0, idx + 1) + cleaned.slice(idx + 1).replace(/[.,]/g, "");
+  }
+  return cleaned.slice(0, maxLen);
+}
+function parseNascimentoDigitado(raw=""){
+  const digits = onlyDigits(raw).slice(0,8);
+  if(!(digits.length===6 || digits.length===8)) return null;
+  const dia = Number(digits.slice(0,2));
+  const mes = Number(digits.slice(2,4));
+  let ano;
+  if(digits.length===8){
+    ano = Number(digits.slice(4,8));
+  }else{
+    const yy = Number(digits.slice(4,6));
+    const currentYY = new Date().getFullYear() % 100;
+    ano = yy <= currentYY ? (2000 + yy) : (1900 + yy);
+  }
+  const dt = new Date(ano, mes - 1, dia);
+  if(
+    Number.isNaN(dt.getTime()) ||
+    dt.getFullYear() !== ano ||
+    dt.getMonth() !== mes - 1 ||
+    dt.getDate() !== dia
+  ) return null;
+  return {
+    iso: `${ano}-${pad(mes)}-${pad(dia)}`,
+    display: `${pad(dia)}/${pad(mes)}/${ano}`
+  };
+}
+function formatNascimentoInput(raw=""){
+  const value = String(raw || "").trim();
+  if(!value) return "";
+  if(/^\d{4}-\d{2}-\d{2}$/.test(value)){
+    const [y,m,d] = value.split("-");
+    return `${d}/${m}/${y}`;
+  }
+  const parsed = parseNascimentoDigitado(value);
+  if(parsed) return parsed.display;
+  const digits = onlyDigits(value).slice(0,8);
+  if(digits.length<=2) return digits;
+  if(digits.length<=4) return `${digits.slice(0,2)}/${digits.slice(2)}`;
+  return `${digits.slice(0,2)}/${digits.slice(2,4)}/${digits.slice(4)}`;
+}
+function normalizeForSearch(s=""){
 function normalizeForSearch(s=""){
   return String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
 }
@@ -54,12 +117,127 @@ function maskCPF(input){
 
 /* ---------------- state ---------------- */
 const defaultState = () => ({
-  version: 3,
+  version: 9,
   lastSavedAt: null,
   days: [],
   favorites: { reguladores: [], unidades: [] }
 });
 
+const PROCEDIMENTO_LABELS = {
+  abordagem: "Abordagem",
+  avaliacao: "Avaliação",
+  curativo: "Curativo",
+  examePrimario: "Exame primário",
+  exameSecundario: "Exame secundário",
+  imobilizacao: "Imobilização",
+  colarCervical: "Imobilização com colar cervical",
+  transporte: "Transporte",
+  rcp: "RCP"
+};
+
+const PUPILA_LABELS = {
+  isocorica: "Isocórica",
+  miotica: "Miotica",
+  midriatica: "Midriatica",
+  anisocorica: "Anisocórica"
+};
+
+function getProcedimentosSelecionados(procedimentos={}){
+  return Object.entries(PROCEDIMENTO_LABELS)
+    .filter(([key]) => !!procedimentos?.[key])
+    .map(([,label]) => label);
+}
+
+function formatPupilaResumo(pupila={}){
+  const tipo = PUPILA_LABELS[pupila?.tipo] || "";
+  const lados = [];
+  if(pupila?.esquerda) lados.push("esquerda");
+  if(pupila?.direita) lados.push("direita");
+
+  if(!tipo && !pupila?.reagente) return "";
+
+  let resumo = tipo || "Sem tipo informado";
+  if(pupila?.reagente){
+    resumo += lados.length ? ` • reagente (${lados.join(" e ")})` : " • reagente";
+  }
+  return resumo;
+}
+
+function ensureEvaluationShape(ev={}){
+  const vitais = ev.vitais || {};
+  return {
+    ...ev,
+    startedAt: ev.startedAt || toLocalISODateTimeFromTimestamp(ev.createdAt) || nowLocalISODateTime(),
+    pessoa: {
+      nome: "",
+      documento: "",
+      nascimento: "",
+      idade: "",
+      ...(ev.pessoa || {})
+    },
+    vitais: {
+      pa: { prejudicada:false, pas:"", pad:"", ...(vitais.pa || {}) },
+      fc: { prejudicada:false, valor:"", ...(vitais.fc || {}) },
+      spo2: { prejudicada:false, valor:"", ...(vitais.spo2 || {}) },
+      mr: { prejudicada:false, valor:"", ...(vitais.mr || {}) },
+      temperatura: vitais.temperatura || "",
+      glasgow: vitais.glasgow || "",
+      pupila: {
+        tipo: "",
+        reagente: false,
+        esquerda: false,
+        direita: false,
+        ...(vitais.pupila || {})
+      }
+    },
+    procedimentos: {
+      abordagem: false,
+      avaliacao: false,
+      curativo: false,
+      examePrimario: false,
+      exameSecundario: false,
+      imobilizacao: false,
+      colarCervical: false,
+      transporte: false,
+      rcp: false,
+      ...(ev.procedimentos || {})
+    },
+    regulacao: {
+      regulador: "",
+      senha: "",
+      unidade: "",
+      ...(ev.regulacao || {})
+    },
+    admissao: {
+      tipo: "",
+      genero: "",
+      nome: "",
+      macaRetida: false,
+      dataHora: "",
+      ...(ev.admissao || {})
+    }
+  };
+}
+
+function normalizeState(state){
+  const base = defaultState();
+  const next = {
+    ...base,
+    ...(state || {}),
+    favorites: {
+      reguladores: state?.favorites?.reguladores || [],
+      unidades: state?.favorites?.unidades || []
+    }
+  };
+  next.version = 9;
+  next.days = (state?.days || []).map(day => ({
+    ...day,
+    evaluations: (day.evaluations || []).map(ensureEvaluationShape)
+  }));
+  return next;
+}
+
+let STATE = defaultState();
 let STATE = defaultState();
 let HYDRATED = false;
 
@@ -70,7 +248,12 @@ const persist = debounce(async ()=>{
 
 async function init(){
   const loaded = await loadState();
-  if(loaded) STATE = loaded;
+  if(loaded){
+    STATE = normalizeState(loaded);
+    if((loaded.version || 0) < 9) saveState(STATE).catch(()=>{});
+  }else{
+    STATE = defaultState();
+  }
   HYDRATED = true;
 
   if("serviceWorker" in navigator){
@@ -85,6 +268,7 @@ async function init(){
   render();
 }
 
+function setState(mutator, opts={ render:true }){
 function setState(mutator, opts={ render:true }){
   mutator(STATE);
   persist();
@@ -118,11 +302,12 @@ function deleteDay(dayId){
 }
 
 function createEvaluation(dayId){
-  const ev = {
+  const ev = ensureEvaluationShape({
     id: uid("ev"),
-    status: "draft", // draft | saved
+    status: "draft",
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    startedAt: nowLocalISODateTime(),
 
     protocolo: "",
     pessoa: { nome:"", documento:"", nascimento:"", idade:"" },
@@ -135,21 +320,33 @@ function createEvaluation(dayId){
       fc: { prejudicada:false, valor:"" },
       spo2:{ prejudicada:false, valor:"" },
       mr: { prejudicada:false, valor:"" },
-      glasgow: ""
+      temperatura: "",
+      glasgow: "",
+      pupila: { tipo:"", reagente:false, esquerda:false, direita:false }
     },
 
-    casoClinico: "", // label: Evolução
+    procedimentos: {
+      abordagem:false,
+      avaliacao:false,
+      curativo:false,
+      examePrimario:false,
+      exameSecundario:false,
+      imobilizacao:false,
+      colarCervical:false,
+      transporte:false,
+      rcp:false
+    },
 
+    casoClinico: "",
     regulacao: { regulador:"", senha:"", unidade:"" },
-
     admissao: {
-      tipo:"",            // medico | enfermeiro
-      genero:"",          // m | f
+      tipo:"",
+      genero:"",
       nome:"",
       macaRetida:false,
       dataHora:""
     }
-  };
+  });
 
   setState(s=>{
     const d = (s.days||[]).find(x=>x.id===dayId);
@@ -160,6 +357,7 @@ function createEvaluation(dayId){
   return ev.id;
 }
 
+function updateEvaluation(dayId, evId, nextEv, opts={ render:true }){
 function updateEvaluation(dayId, evId, nextEv, opts={ render:true }){
   setState(s=>{
     const d = (s.days||[]).find(x=>x.id===dayId);
@@ -359,8 +557,8 @@ function renderDay(app, dayId){
 
       <div class="list" id="evalList"></div>
 
-      <div style="margin-top:16px; margin-bottom:16px;">
-        ${btn("Copiar todos protocolos","primary",`type="button" id="copyProtocolsBtn" style="width:100%"`)}
+      <div style="margin-top:12px">
+        ${btn("Copiar todos protocolos","ghost",`type="button" id="copyProtocolsBtn"`)}
       </div>
     </main>
     ${toast(TOAST)}
@@ -404,28 +602,22 @@ function renderDay(app, dayId){
 
   $("#q").addEventListener("input", renderList);
   $("#clearQBtn").onclick = ()=>{ $("#q").value=""; renderList(); };
-  $("#copyProtocolsBtn").onclick = ()=>{
-    const protocolos = getProtocolosDoDia(day);
-    if(!protocolos.length){
-      setToast("Nenhum protocolo preenchido ainda.");
-      return;
-    }
-    showProtocolosModal(protocolos);
-  };
+  $("#copyProtocolsBtn").onclick = ()=>showCopyProtocolsModal(day);
   renderList();
 }
 
 function generateResumo(day, ev){
   const linhas=[];
+  const inicioAvaliacao = ev.startedAt || toLocalISODateTimeFromTimestamp(ev.createdAt);
   linhas.push(`Protocolo: ${ev.protocolo||"-"}`);
   if(ev.endereco) linhas.push(`Endereço: ${ev.endereco}`);
-linhas.push(`Data: ${day?.dateISO ? formatDateBR(day.dateISO) : "-"}`);
+  linhas.push(`Data: ${day?.dateISO ? formatDateBR(day.dateISO) : "-"}`);
+  linhas.push(`Hora de início: ${inicioAvaliacao ? formatTimeBR(inicioAvaliacao) : "-"}`);
 
-// linha em branco de separação
-linhas.push("");
-  
+  linhas.push("");
   linhas.push(`Vítima: ${displayName(ev)}`);
   linhas.push(`Documento: ${ev.pessoa?.documento||"-"}`);
+  if(ev.pessoa?.nascimento) linhas.push(`Data de nascimento: ${formatNascimentoInput(ev.pessoa.nascimento)}`);
   const idadeTxt = (ev.pessoa?.idade||"").trim();
   if(idadeTxt) linhas.push(`Idade: ${idadeTxt} ano(s)`);
   if(ev.gps) linhas.push(`GPS: ${ev.gps}`);
@@ -447,20 +639,27 @@ linhas.push("");
   const mrFilled = !!String(mrObj.valor||"").trim();
   const mrTxt = (mrObj.prejudicada || !mrFilled) ? "Prejudicada" : (mrObj.valor||"-");
 
+  const tempTxt = String(v.temperatura||"").trim() ? `${v.temperatura} °C` : "-";
   const gcsFilled = !!String(v.glasgow||"").trim();
   const gcsTxt = gcsFilled ? v.glasgow : "Prejudicada";
+  const pupilaTxt = formatPupilaResumo(v.pupila) || "-";
+
   linhas.push("");
   linhas.push("Sinais vitais:");
   linhas.push(`- PA: ${paTxt}`);
   linhas.push(`- FC: ${fcTxt}${fcTxt !== "Prejudicada" ? " bpm" : ""}`);
   linhas.push(`- SpO₂: ${spo2Txt}`);
   linhas.push(`- MR: ${mrTxt}${mrTxt !== "Prejudicada" ? " irpm" : ""}`);
+  linhas.push(`- Temperatura: ${tempTxt}`);
   linhas.push(`- Glasgow: ${gcsTxt}`);
+  linhas.push(`- Pupilas: ${pupilaTxt}`);
 
-  if(ev.casoClinico){
+  const procedimentos = getProcedimentosSelecionados(ev.procedimentos || {});
+  if(procedimentos.length || ev.casoClinico){
     linhas.push("");
     linhas.push("Evolução:");
-    linhas.push(ev.casoClinico);
+    if(procedimentos.length) linhas.push(`Procedimentos realizados: ${procedimentos.join(", ")}.`);
+    if(ev.casoClinico) linhas.push(ev.casoClinico);
   }
 
   const reg=ev.regulacao||{};
@@ -476,7 +675,7 @@ linhas.push("");
   if(adm.macaRetida===undefined && adm.marcaRetida!==undefined) adm.macaRetida = adm.marcaRetida;
 
   const nomeTxt = (adm.nome||"").trim();
-  const genero = adm.genero || ""; // m|f
+  const genero = adm.genero || "";
   const cargo = adm.tipo==="medico" ? (genero==="f" ? "Médica" : "Médico")
               : adm.tipo==="enfermeiro" ? (genero==="f" ? "Enfermeira" : "Enfermeiro")
               : "Profissional";
@@ -505,7 +704,7 @@ function renderEval(app, dayId, evId){
     return;
   }
 
-  let draft = safeClone(ev);
+  let draft = safeClone(ensureEvaluationShape(ev));
 
   const left = btn("←","ghost",`type="button" id="backBtn"`);
   const right = btn("🧾 Resumo","ghost",`type="button" id="resumoBtn"`);
@@ -517,7 +716,7 @@ function renderEval(app, dayId, evId){
       </div>
 
       ${section("1) Informações gerais", `
-        ${field("Protocolo (primeiro de tudo)", `<input class="input" id="protocolo" placeholder="Ex.: 2026-000123" />`)}
+        ${field("Protocolo", `<input class="input" id="protocolo" inputmode="numeric" pattern="[0-9]*" placeholder="Ex.: 2026000123" />`)}
         ${field("Endereço", `<textarea class="textarea" id="endereco" rows="3" placeholder="Rua, número, bairro, referência..."></textarea>`)}
         <div class="row space">
           <div class="muted" id="gpsLabel">${ev.gps?escapeHTML("GPS: "+ev.gps):"Sem GPS registrado."}</div>
@@ -535,8 +734,8 @@ function renderEval(app, dayId, evId){
         <div class="grid2">
           <div class="card">
             <div class="title">Data de nascimento</div>
-            <input class="input" type="date" id="nasc" />
-            <div class="muted" style="margin-top:6px">Ao preencher, a idade é calculada automaticamente.</div>
+            <input class="input" id="nasc" inputmode="numeric" placeholder="DDMMAAAA ou DDMMAA" />
+            <div class="muted" style="margin-top:6px">Digite numericamente. Ex.: 04041994 ou 040494.</div>
           </div>
           <div class="card">
             <div class="title">Idade</div>
@@ -575,6 +774,11 @@ function renderEval(app, dayId, evId){
             <input class="input" id="mr" inputmode="numeric" placeholder="irpm" />
             <label class="check"><input type="checkbox" id="mrPrej" /> <span>Prejudicada</span></label>
           </div>
+
+          <div class="card">
+            <div class="title">Temperatura</div>
+            <input class="input" id="temperatura" inputmode="decimal" placeholder="°C" />
+          </div>
         </div>
 
         ${field("Glasgow", `
@@ -583,9 +787,35 @@ function renderEval(app, dayId, evId){
             ${Array.from({length:15},(_,i)=>15-i).map(n=>`<option value="${n}">${n}</option>`).join("")}
           </select>
         `)}
+
+        <div class="card">
+          <div class="title">Pupilas</div>
+          ${field("Tipo de pupila", `
+            <select class="input" id="pupilaTipo">
+              <option value="">Selecione…</option>
+              <option value="isocorica">Isocórica</option>
+              <option value="miotica">Miotica</option>
+              <option value="midriatica">Midriatica</option>
+              <option value="anisocorica">Anisocórica</option>
+            </select>
+          `)}
+          <label class="check"><input type="checkbox" id="pupilaReagente" /> <span>Reagente</span></label>
+          <div id="pupilaLadosWrap" style="display:none; margin-top:8px">
+            <div class="muted" style="margin-bottom:6px">Informe o lado reagente:</div>
+            <label class="check"><input type="checkbox" id="pupilaEsquerda" /> <span>Esquerda</span></label>
+            <label class="check"><input type="checkbox" id="pupilaDireita" /> <span>Direita</span></label>
+          </div>
+        </div>
       `)}
 
       ${section("4) Evolução", `
+        <div class="grid2">
+          ${Object.entries(PROCEDIMENTO_LABELS).map(([key,label]) => `
+            <div class="card">
+              <label class="check" style="margin-top:0"><input type="checkbox" id="proc_${key}" /> <span>${label}</span></label>
+            </div>
+          `).join("")}
+        </div>
         ${field("Evolução", `<textarea class="textarea" id="casoClinico" rows="6" placeholder="Descreva a evolução (o campo cresce conforme você digita)…"></textarea>`)}
       `)}
 
@@ -631,11 +861,10 @@ function renderEval(app, dayId, evId){
   $("#backBtn").onclick = ()=>location.hash = `#/day/${day.id}`;
   $("#resumoBtn").onclick = ()=>showResumoModal(day, getEval(getDay(dayId), evId) || draft);
 
-  // set initial values
-  $("#protocolo").value = ev.protocolo||"";
+  $("#protocolo").value = onlyDigits(ev.protocolo||"");
   $("#nome").value = ev.pessoa?.nome||"";
   $("#doc").value = ev.pessoa?.documento||"";
-  $("#nasc").value = ev.pessoa?.nascimento||"";
+  $("#nasc").value = formatNascimentoInput(ev.pessoa?.nascimento||"");
   $("#idade").value = ev.pessoa?.idade||"";
   $("#endereco").value = ev.endereco||"";
   $("#casoClinico").value = ev.casoClinico||"";
@@ -643,20 +872,26 @@ function renderEval(app, dayId, evId){
   $("#pas").value = ev.vitais?.pa?.pas||"";
   $("#pad").value = ev.vitais?.pa?.pad||"";
   $("#paPrej").checked = !!ev.vitais?.pa?.prejudicada;
-
   $("#fc").value = ev.vitais?.fc?.valor||"";
   $("#fcPrej").checked = !!ev.vitais?.fc?.prejudicada;
-
   $("#spo2").value = ev.vitais?.spo2?.valor||"";
   $("#spo2Prej").checked = !!ev.vitais?.spo2?.prejudicada;
-
   $("#mr").value = ev.vitais?.mr?.valor||"";
   $("#mrPrej").checked = !!ev.vitais?.mr?.prejudicada;
-
+  $("#temperatura").value = ev.vitais?.temperatura||"";
   $("#glasgow").value = ev.vitais?.glasgow||"";
+  $("#pupilaTipo").value = ev.vitais?.pupila?.tipo||"";
+  $("#pupilaReagente").checked = !!ev.vitais?.pupila?.reagente;
+  $("#pupilaEsquerda").checked = !!ev.vitais?.pupila?.esquerda;
+  $("#pupilaDireita").checked = !!ev.vitais?.pupila?.direita;
   $("#senha").value = ev.regulacao?.senha||"";
   $("#fav_regulador_input").value = ev.regulacao?.regulador||"";
   $("#fav_unidade_input").value = ev.regulacao?.unidade||"";
+
+  Object.keys(PROCEDIMENTO_LABELS).forEach(key=>{
+    const el = document.getElementById(`proc_${key}`);
+    if(el) el.checked = !!ev.procedimentos?.[key];
+  });
 
   const adm = ev.admissao || {};
   const macaFlag = (adm.macaRetida!==undefined) ? adm.macaRetida : !!adm.marcaRetida;
@@ -667,15 +902,21 @@ function renderEval(app, dayId, evId){
   setAdmButtons(adm.tipo || "");
   setGeneroButtons(adm.genero || "");
 
-  // Keep a fresh draft baseline after setting UI
-  draft = safeClone(getEval(getDay(dayId), evId) || ev);
+  const syncPupilaUI = ()=>{
+    const show = $("#pupilaReagente").checked;
+    $("#pupilaLadosWrap").style.display = show ? "block" : "none";
+    $("#pupilaEsquerda").disabled = !show;
+    $("#pupilaDireita").disabled = !show;
+  };
+  syncPupilaUI();
+
+  draft = safeClone(ensureEvaluationShape(getEval(getDay(dayId), evId) || ev));
 
   const apply = (mutate)=>{
     mutate(draft);
     updateEvaluation(day.id, ev.id, draft, { render:false });
   };
 
-  // CPF/doc logic
   $("#doc").addEventListener("input", e=>{
     const raw = e.target.value;
     const digits = onlyDigits(raw);
@@ -690,12 +931,14 @@ function renderEval(app, dayId, evId){
     }
   });
 
-  $("#protocolo").addEventListener("input", e=>apply(n=>{ n.protocolo=e.target.value; }));
+  $("#protocolo").addEventListener("input", e=>{
+    const valor = sanitizeInteger(e.target.value, 30);
+    e.target.value = valor;
+    apply(n=>{ n.protocolo=valor; });
+  });
   $("#nome").addEventListener("input", e=>apply(n=>{ n.pessoa.nome=e.target.value; }));
   $("#endereco").addEventListener("input", e=>apply(n=>{ n.endereco=e.target.value; }));
   $("#casoClinico").addEventListener("input", e=>apply(n=>{ n.casoClinico=e.target.value; }));
-
-  // Auto-grow Evolução
   $("#casoClinico").addEventListener("input", ()=>{
     const el=$("#casoClinico");
     const lines = el.value.split("\n").length;
@@ -703,7 +946,6 @@ function renderEval(app, dayId, evId){
     el.rows = est;
   });
 
-  // nascimento/idade
   function calcIdade(iso){
     if(!iso) return "";
     const [y,m,d] = iso.split("-").map(Number);
@@ -722,10 +964,18 @@ function renderEval(app, dayId, evId){
     $("#nasc").disabled = !!(idadeVal && !nascVal);
   }
   $("#nasc").addEventListener("input", e=>{
-    const iso = e.target.value;
-    const idade = calcIdade(iso);
-    if(idade) $("#idade").value = idade;
-    apply(n=>{ n.pessoa.nascimento = iso; n.pessoa.idade = idade || ""; });
+    const parsed = parseNascimentoDigitado(e.target.value);
+    e.target.value = formatNascimentoInput(e.target.value);
+    if(parsed){
+      const idade = calcIdade(parsed.iso);
+      if(idade) $("#idade").value = idade;
+      apply(n=>{ n.pessoa.nascimento = parsed.iso; n.pessoa.idade = idade || ""; });
+    }else if(!onlyDigits(e.target.value)){
+      apply(n=>{ n.pessoa.nascimento = ""; if(!($("#idade").value||"").trim()) n.pessoa.idade = ""; });
+    }else{
+      $("#idade").value = "";
+      apply(n=>{ n.pessoa.nascimento = ""; n.pessoa.idade = ""; });
+    }
     syncDobAgeUI();
   });
   $("#idade").addEventListener("input", e=>{
@@ -741,7 +991,6 @@ function renderEval(app, dayId, evId){
   });
   syncDobAgeUI();
 
-  // vitais disable if prejudicada
   const syncPrej = ()=>{
     $("#pas").disabled = $("#paPrej").checked;
     $("#pad").disabled = $("#paPrej").checked;
@@ -751,22 +1000,47 @@ function renderEval(app, dayId, evId){
   };
   syncPrej();
 
-  $("#pas").addEventListener("input", e=>apply(n=>{ n.vitais.pa.pas=e.target.value; }));
-  $("#pad").addEventListener("input", e=>apply(n=>{ n.vitais.pa.pad=e.target.value; }));
+  $("#pas").addEventListener("input", e=>{ const v=sanitizeInteger(e.target.value,4); e.target.value=v; apply(n=>{ n.vitais.pa.pas=v; }); });
+  $("#pad").addEventListener("input", e=>{ const v=sanitizeInteger(e.target.value,4); e.target.value=v; apply(n=>{ n.vitais.pa.pad=v; }); });
   $("#paPrej").addEventListener("change", e=>{ apply(n=>{ n.vitais.pa.prejudicada=e.target.checked; }); syncPrej(); });
-
-  $("#fc").addEventListener("input", e=>apply(n=>{ n.vitais.fc.valor=e.target.value; }));
+  $("#fc").addEventListener("input", e=>{ const v=sanitizeInteger(e.target.value,3); e.target.value=v; apply(n=>{ n.vitais.fc.valor=v; }); });
   $("#fcPrej").addEventListener("change", e=>{ apply(n=>{ n.vitais.fc.prejudicada=e.target.checked; }); syncPrej(); });
-
-  $("#spo2").addEventListener("input", e=>apply(n=>{ n.vitais.spo2.valor=e.target.value; }));
+  $("#spo2").addEventListener("input", e=>{ const v=sanitizeInteger(e.target.value,3); e.target.value=v; apply(n=>{ n.vitais.spo2.valor=v; }); });
   $("#spo2Prej").addEventListener("change", e=>{ apply(n=>{ n.vitais.spo2.prejudicada=e.target.checked; }); syncPrej(); });
-
-  $("#mr").addEventListener("input", e=>apply(n=>{ n.vitais.mr.valor=e.target.value; }));
+  $("#mr").addEventListener("input", e=>{ const v=sanitizeInteger(e.target.value,3); e.target.value=v; apply(n=>{ n.vitais.mr.valor=v; }); });
   $("#mrPrej").addEventListener("change", e=>{ apply(n=>{ n.vitais.mr.prejudicada=e.target.checked; }); syncPrej(); });
-
+  $("#temperatura").addEventListener("input", e=>{
+    const valor = sanitizeDecimal(e.target.value, 6);
+    e.target.value = valor;
+    apply(n=>{ n.vitais.temperatura=valor; });
+  });
   $("#glasgow").addEventListener("change", e=>apply(n=>{ n.vitais.glasgow=e.target.value; }));
+  $("#pupilaTipo").addEventListener("change", e=>apply(n=>{ n.vitais.pupila.tipo=e.target.value; }));
+  $("#pupilaReagente").addEventListener("change", e=>{
+    const checked = e.target.checked;
+    if(!checked){
+      $("#pupilaEsquerda").checked = false;
+      $("#pupilaDireita").checked = false;
+    }
+    apply(n=>{
+      n.vitais.pupila.reagente=checked;
+      if(!checked){
+        n.vitais.pupila.esquerda=false;
+        n.vitais.pupila.direita=false;
+      }
+    });
+    syncPupilaUI();
+  });
+  $("#pupilaEsquerda").addEventListener("change", e=>apply(n=>{ n.vitais.pupila.esquerda=e.target.checked; }));
+  $("#pupilaDireita").addEventListener("change", e=>apply(n=>{ n.vitais.pupila.direita=e.target.checked; }));
 
-  // favorites + regulacao
+  Object.keys(PROCEDIMENTO_LABELS).forEach(key=>{
+    const el = document.getElementById(`proc_${key}`);
+    if(el){
+      el.addEventListener("change", e=>apply(n=>{ n.procedimentos[key]=e.target.checked; }));
+    }
+  });
+
   wireFavoriteField("regulador", "reguladores",
     ()=> (getEval(getDay(dayId), evId)?.regulacao?.regulador||""),
     (val)=>apply(n=>{ n.regulacao.regulador=val; })
@@ -777,15 +1051,11 @@ function renderEval(app, dayId, evId){
     (val)=>apply(n=>{ n.regulacao.unidade=val; })
   );
 
-  // admission
   $("#admNome").addEventListener("input", e=>apply(n=>{ n.admissao.nome=e.target.value; }));
-
   $("#admMed").onclick = ()=>{ apply(n=>{ n.admissao.tipo="medico"; }); setAdmButtons("medico"); };
   $("#admEnf").onclick = ()=>{ apply(n=>{ n.admissao.tipo="enfermeiro"; }); setAdmButtons("enfermeiro"); };
-
   $("#genM").onclick = ()=>{ apply(n=>{ n.admissao.genero="m"; }); setGeneroButtons("m"); };
   $("#genF").onclick = ()=>{ apply(n=>{ n.admissao.genero="f"; }); setGeneroButtons("f"); };
-
   $("#macaRetida").addEventListener("change", e=>{
     const checked = e.target.checked;
     $("#macaWrap").style.display = checked ? "block" : "none";
@@ -820,7 +1090,6 @@ function renderEval(app, dayId, evId){
 
   wireHoldToDelete(()=>{ deleteEvaluation(day.id, ev.id); location.hash = `#/day/${day.id}`; });
 
-  // enter => next (except textarea)
   function isVisible(el){
     return !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
   }
@@ -845,7 +1114,6 @@ function renderEval(app, dayId, evId){
     });
   });
 
-  // filled highlight
   function markFilled(el){
     if(!el) return;
     const filled = !!String(el.value||"").trim();
@@ -860,7 +1128,7 @@ function renderEval(app, dayId, evId){
     el.addEventListener("input", ()=>markFilled(el));
     el.addEventListener("change", ()=>markFilled(el));
   });
-  ["paPrej","fcPrej","spo2Prej","mrPrej"].forEach(id=>{
+  ["paPrej","fcPrej","spo2Prej","mrPrej","pupilaReagente", ...Object.keys(PROCEDIMENTO_LABELS).map(key=>`proc_${key}`)].forEach(id=>{
     const chk = document.getElementById(id);
     if(chk){
       markCardFilledFromCheckbox(chk);
@@ -878,6 +1146,7 @@ function renderEval(app, dayId, evId){
   }
 }
 
+function favoriteField(label, kind, favKey, idBase){
 function favoriteField(label, kind, favKey, idBase){
   const inputId = `fav_${idBase}_input`;
   const listId = `fav_${idBase}_list`;
@@ -948,45 +1217,6 @@ function wireHoldToDelete(onConfirm){
   });
   ["pointerup","pointerleave","pointercancel"].forEach(evt=>btn.addEventListener(evt, stop));
 }
-function getProtocolosDoDia(day){
-  return (day?.evaluations||[])
-    .map(ev => String(ev?.protocolo||"").trim())
-    .filter(Boolean);
-}
-
-function showProtocolosModal(protocolos){
-  const text = protocolos.join("\n");
-  const modal = openModal(`
-    <div class="modal" role="dialog" aria-modal="true">
-      <div class="modal-header">
-        <div class="modal-title">Todos os protocolos</div>
-        <button class="btn ghost" id="closeProtocols" type="button">✕</button>
-      </div>
-      <div class="modal-body">
-        <textarea class="textarea" id="protocolosTA" rows="14" readonly>${escapeHTML(text)}</textarea>
-        <div class="muted" style="margin-top:8px">Cada protocolo fica em uma linha para facilitar colar em outro local.</div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn ghost" id="fecharProtocols" type="button">Fechar</button>
-        <button class="btn primary" id="copyProtocols" type="button">Copiar</button>
-      </div>
-    </div>
-  `);
-  modal.querySelector("#closeProtocols").onclick = ()=>closeModal(modal);
-  modal.querySelector("#fecharProtocols").onclick = ()=>closeModal(modal);
-  modal.querySelector("#copyProtocols").onclick = async ()=>{
-    const ta = modal.querySelector("#protocolosTA");
-    try{
-      await navigator.clipboard.writeText(ta.value);
-      setToast("Protocolos copiados.");
-    }catch{
-      ta.focus(); ta.select();
-      document.execCommand("copy");
-      setToast("Protocolos copiados.");
-    }
-  };
-}
-
 
 function showResumoModal(day, ev){
   const text = generateResumo(day, ev);
@@ -1021,4 +1251,47 @@ function showResumoModal(day, ev){
   };
 }
 
+function showCopyProtocolsModal(day){
+  const protocolos = (day?.evaluations || [])
+    .map(ev => String(ev.protocolo || "").trim())
+    .filter(Boolean);
+
+  if(!protocolos.length){
+    setToast("Nenhum protocolo preenchido.");
+    return;
+  }
+
+  const text = protocolos.join("\n");
+  const modal = openModal(`
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <div class="modal-title">Todos os protocolos</div>
+        <button class="btn ghost" id="closeProtocols" type="button">✕</button>
+      </div>
+      <div class="modal-body">
+        <textarea class="textarea" id="protocolosTA" rows="16" readonly>${escapeHTML(text)}</textarea>
+        <div class="muted" style="margin-top:8px">Cada protocolo fica em uma linha para colar em outro lugar.</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn ghost" id="fecharProtocols" type="button">Fechar</button>
+        <button class="btn primary" id="copyProtocols" type="button">Copiar</button>
+      </div>
+    </div>
+  `);
+  modal.querySelector("#closeProtocols").onclick = ()=>closeModal(modal);
+  modal.querySelector("#fecharProtocols").onclick = ()=>closeModal(modal);
+  modal.querySelector("#copyProtocols").onclick = async ()=>{
+    const ta = modal.querySelector("#protocolosTA");
+    try{
+      await navigator.clipboard.writeText(ta.value);
+      setToast("Protocolos copiados.");
+    }catch{
+      ta.focus(); ta.select();
+      document.execCommand("copy");
+      setToast("Protocolos copiados.");
+    }
+  };
+}
+
+init();
 init();

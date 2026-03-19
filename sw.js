@@ -1,9 +1,9 @@
-const CACHE = "triagem-gu-static-v8";
+const CACHE = "triagem-gu-static-v9";
 const ASSETS = [
   "./",
-  "./index.html?v=8",
-  "./styles.css?v=8",
-  "./app.js?v=8",
+  "./index.html?v=9",
+  "./styles.css?v=9",
+  "./app.js?v=9",
   "./db.js",
   "./manifest.webmanifest",
   "./pwa-192.png",
@@ -29,7 +29,6 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
 
-  // Network-first para arquivos versionados (?v=)
   const url = new URL(req.url);
   const isVersioned = url.searchParams.has("v");
 
