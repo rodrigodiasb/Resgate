@@ -81,7 +81,6 @@ function formatNascimentoInput(raw=""){
   return `${digits.slice(0,2)}/${digits.slice(2,4)}/${digits.slice(4)}`;
 }
 function normalizeForSearch(s=""){
-function normalizeForSearch(s=""){
   return String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
 }
 function debounce(fn, ms=450){
@@ -268,7 +267,6 @@ async function init(){
 }
 
 function setState(mutator, opts={ render:true }){
-function setState(mutator, opts={ render:true }){
   mutator(STATE);
   persist();
   if(opts.render) render();
@@ -356,7 +354,6 @@ function createEvaluation(dayId){
   return ev.id;
 }
 
-function updateEvaluation(dayId, evId, nextEv, opts={ render:true }){
 function updateEvaluation(dayId, evId, nextEv, opts={ render:true }){
   setState(s=>{
     const d = (s.days||[]).find(x=>x.id===dayId);
@@ -1146,7 +1143,6 @@ function renderEval(app, dayId, evId){
 }
 
 function favoriteField(label, kind, favKey, idBase){
-function favoriteField(label, kind, favKey, idBase){
   const inputId = `fav_${idBase}_input`;
   const listId = `fav_${idBase}_list`;
   const starId = `fav_${idBase}_star`;
@@ -1292,5 +1288,4 @@ function showCopyProtocolsModal(day){
   };
 }
 
-init();
 init();
