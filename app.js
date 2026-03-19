@@ -17,33 +17,7 @@ function formatDateTimeBR(isoDT){
   const [date,time]=isoDT.split("T");
   return `${formatDateBR(date)} ${time}`;
 }
-function formatTimeBR(isoDT){
-  if(!isoDT) return "";
-  const [,time=""] = String(isoDT).split("T");
-  return time || "";
-}
-function timestampToLocalISODateTime(ts){
-  if(!ts) return "";
-  const d = new Date(ts);
-  if(Number.isNaN(d.getTime())) return "";
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 function onlyDigits(s=""){ return String(s).replace(/\D+/g,""); }
-function sanitizeInteger(value="", maxLen=null){
-  let cleaned = onlyDigits(value);
-  if(Number.isInteger(maxLen) && maxLen > 0) cleaned = cleaned.slice(0, maxLen);
-  return cleaned;
-}
-function sanitizeDecimal(value="", maxLen=null){
-  let cleaned = String(value).replace(/[^\d.,]/g, "");
-  const match = cleaned.match(/[.,]/);
-  if(match){
-    const idx = match.index;
-    cleaned = cleaned.slice(0, idx + 1) + cleaned.slice(idx + 1).replace(/[.,]/g, "");
-  }
-  if(Number.isInteger(maxLen) && maxLen > 0) cleaned = cleaned.slice(0, maxLen);
-  return cleaned;
-}
 function normalizeForSearch(s=""){
   return String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
 }
@@ -80,125 +54,11 @@ function maskCPF(input){
 
 /* ---------------- state ---------------- */
 const defaultState = () => ({
-  version: 4,
+  version: 3,
   lastSavedAt: null,
   days: [],
   favorites: { reguladores: [], unidades: [] }
 });
-
-const PROCEDIMENTO_LABELS = {
-  abordagem: "Abordagem",
-  avaliacao: "Avaliação",
-  curativo: "Curativo",
-  examePrimario: "Exame primário",
-  exameSecundario: "Exame secundário",
-  imobilizacao: "Imobilização",
-  colarCervical: "Imobilização com colar cervical",
-  transporte: "Transporte",
-  rcp: "RCP"
-};
-
-const PUPILA_LABELS = {
-  isocorica: "Isocórica",
-  miotica: "Miotica",
-  midriatica: "Midriatica",
-  anisocorica: "Anisocórica"
-};
-
-function getProcedimentosSelecionados(procedimentos={}){
-  return Object.entries(PROCEDIMENTO_LABELS)
-    .filter(([key]) => !!procedimentos?.[key])
-    .map(([,label]) => label);
-}
-
-function formatPupilaResumo(pupila={}){
-  const tipo = PUPILA_LABELS[pupila?.tipo] || "";
-  const lados = [];
-  if(pupila?.esquerda) lados.push("esquerda");
-  if(pupila?.direita) lados.push("direita");
-
-  if(!tipo && !pupila?.reagente) return "";
-
-  let resumo = tipo || "Sem tipo informado";
-  if(pupila?.reagente){
-    resumo += lados.length ? ` • reagente (${lados.join(" e ")})` : " • reagente";
-  }
-  return resumo;
-}
-
-function ensureEvaluationShape(ev={}){
-  const vitais = ev.vitais || {};
-  return {
-    ...ev,
-    startedAt: ev.startedAt || timestampToLocalISODateTime(ev.createdAt) || nowLocalISODateTime(),
-    pessoa: {
-      nome: "",
-      documento: "",
-      nascimento: "",
-      idade: "",
-      ...(ev.pessoa || {})
-    },
-    vitais: {
-      pa: { prejudicada:false, pas:"", pad:"", ...(vitais.pa || {}) },
-      fc: { prejudicada:false, valor:"", ...(vitais.fc || {}) },
-      spo2: { prejudicada:false, valor:"", ...(vitais.spo2 || {}) },
-      mr: { prejudicada:false, valor:"", ...(vitais.mr || {}) },
-      temperatura: vitais.temperatura || "",
-      glasgow: vitais.glasgow || "",
-      pupila: {
-        tipo: "",
-        reagente: false,
-        esquerda: false,
-        direita: false,
-        ...(vitais.pupila || {})
-      }
-    },
-    procedimentos: {
-      abordagem: false,
-      avaliacao: false,
-      curativo: false,
-      examePrimario: false,
-      exameSecundario: false,
-      imobilizacao: false,
-      colarCervical: false,
-      transporte: false,
-      rcp: false,
-      ...(ev.procedimentos || {})
-    },
-    regulacao: {
-      regulador: "",
-      senha: "",
-      unidade: "",
-      ...(ev.regulacao || {})
-    },
-    admissao: {
-      tipo: "",
-      genero: "",
-      nome: "",
-      macaRetida: false,
-      dataHora: "",
-      ...(ev.admissao || {})
-    }
-  };
-}
-
-function normalizeState(state){
-  const base = defaultState();
-  const next = {
-    ...base,
-    ...(state || {}),
-    favorites: {
-      reguladores: state?.favorites?.reguladores || [],
-      unidades: state?.favorites?.unidades || []
-    }
-  };
-  next.version = 4;
-  next.days = (state?.days || []).map(day => ({
-    ...day,
-    evaluations: (day.evaluations || []).map(ensureEvaluationShape)
-  }));
-  return next;
-}
 
 let STATE = defaultState();
 let HYDRATED = false;
@@ -210,12 +70,7 @@ const persist = debounce(async ()=>{
 
 async function init(){
   const loaded = await loadState();
-  if(loaded){
-    STATE = normalizeState(loaded);
-    if((loaded.version || 0) < 4) saveState(STATE).catch(()=>{});
-  }else{
-    STATE = defaultState();
-  }
+  if(loaded) STATE = loaded;
   HYDRATED = true;
 
   if("serviceWorker" in navigator){
@@ -268,7 +123,6 @@ function createEvaluation(dayId){
     status: "draft", // draft | saved
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    startedAt: nowLocalISODateTime(),
 
     protocolo: "",
     pessoa: { nome:"", documento:"", nascimento:"", idade:"" },
@@ -281,21 +135,7 @@ function createEvaluation(dayId){
       fc: { prejudicada:false, valor:"" },
       spo2:{ prejudicada:false, valor:"" },
       mr: { prejudicada:false, valor:"" },
-      temperatura: "",
-      glasgow: "",
-      pupila: { tipo:"", reagente:false, esquerda:false, direita:false }
-    },
-
-    procedimentos: {
-      abordagem:false,
-      avaliacao:false,
-      curativo:false,
-      examePrimario:false,
-      exameSecundario:false,
-      imobilizacao:false,
-      colarCervical:false,
-      transporte:false,
-      rcp:false
+      glasgow: ""
     },
 
     casoClinico: "", // label: Evolução
@@ -518,6 +358,10 @@ function renderDay(app, dayId){
       </div>
 
       <div class="list" id="evalList"></div>
+
+      <div style="margin-top:16px; margin-bottom:16px;">
+        ${btn("Copiar todos protocolos","primary",`type="button" id="copyProtocolsBtn" style="width:100%"`)}
+      </div>
     </main>
     ${toast(TOAST)}
   `;
@@ -560,20 +404,26 @@ function renderDay(app, dayId){
 
   $("#q").addEventListener("input", renderList);
   $("#clearQBtn").onclick = ()=>{ $("#q").value=""; renderList(); };
+  $("#copyProtocolsBtn").onclick = ()=>{
+    const protocolos = getProtocolosDoDia(day);
+    if(!protocolos.length){
+      setToast("Nenhum protocolo preenchido ainda.");
+      return;
+    }
+    showProtocolosModal(protocolos);
+  };
   renderList();
 }
 
 function generateResumo(day, ev){
   const linhas=[];
-  const inicioAvaliacao = ev.startedAt || timestampToLocalISODateTime(ev.createdAt);
   linhas.push(`Protocolo: ${ev.protocolo||"-"}`);
   if(ev.endereco) linhas.push(`Endereço: ${ev.endereco}`);
-  linhas.push(`Data: ${day?.dateISO ? formatDateBR(day.dateISO) : "-"}`);
-  linhas.push(`Hora de início: ${inicioAvaliacao ? formatTimeBR(inicioAvaliacao) : "-"}`);
+linhas.push(`Data: ${day?.dateISO ? formatDateBR(day.dateISO) : "-"}`);
 
-  // linha em branco de separação
-  linhas.push("");
-
+// linha em branco de separação
+linhas.push("");
+  
   linhas.push(`Vítima: ${displayName(ev)}`);
   linhas.push(`Documento: ${ev.pessoa?.documento||"-"}`);
   const idadeTxt = (ev.pessoa?.idade||"").trim();
@@ -597,27 +447,20 @@ function generateResumo(day, ev){
   const mrFilled = !!String(mrObj.valor||"").trim();
   const mrTxt = (mrObj.prejudicada || !mrFilled) ? "Prejudicada" : (mrObj.valor||"-");
 
-  const tempTxt = String(v.temperatura||"").trim() ? `${v.temperatura} °C` : "-";
   const gcsFilled = !!String(v.glasgow||"").trim();
   const gcsTxt = gcsFilled ? v.glasgow : "Prejudicada";
-  const pupilaTxt = formatPupilaResumo(v.pupila) || "-";
-
   linhas.push("");
   linhas.push("Sinais vitais:");
   linhas.push(`- PA: ${paTxt}`);
   linhas.push(`- FC: ${fcTxt}${fcTxt !== "Prejudicada" ? " bpm" : ""}`);
   linhas.push(`- SpO₂: ${spo2Txt}`);
   linhas.push(`- MR: ${mrTxt}${mrTxt !== "Prejudicada" ? " irpm" : ""}`);
-  linhas.push(`- Temperatura: ${tempTxt}`);
   linhas.push(`- Glasgow: ${gcsTxt}`);
-  linhas.push(`- Pupilas: ${pupilaTxt}`);
 
-  const procedimentos = getProcedimentosSelecionados(ev.procedimentos || {});
-  if(procedimentos.length || ev.casoClinico){
+  if(ev.casoClinico){
     linhas.push("");
     linhas.push("Evolução:");
-    if(procedimentos.length) linhas.push(`Procedimentos realizados: ${procedimentos.join(", ")}.`);
-    if(ev.casoClinico) linhas.push(ev.casoClinico);
+    linhas.push(ev.casoClinico);
   }
 
   const reg=ev.regulacao||{};
@@ -649,7 +492,7 @@ function generateResumo(day, ev){
     linhas.push(`MACA RETIDA ${prep} ${cargo}${nomeTxt ? " " + nomeTxt : ""} em ${dt}`);
   }
 
-return linhas.join("\n");
+  return linhas.join("\n");
 }
 
 function renderEval(app, dayId, evId){
@@ -674,7 +517,7 @@ function renderEval(app, dayId, evId){
       </div>
 
       ${section("1) Informações gerais", `
-        ${field("Protocolo", `<input class="input" id="protocolo" inputmode="numeric" pattern="[0-9]*" placeholder="Ex.: 2026000123" />`)}
+        ${field("Protocolo (primeiro de tudo)", `<input class="input" id="protocolo" placeholder="Ex.: 2026-000123" />`)}
         ${field("Endereço", `<textarea class="textarea" id="endereco" rows="3" placeholder="Rua, número, bairro, referência..."></textarea>`)}
         <div class="row space">
           <div class="muted" id="gpsLabel">${ev.gps?escapeHTML("GPS: "+ev.gps):"Sem GPS registrado."}</div>
@@ -732,11 +575,6 @@ function renderEval(app, dayId, evId){
             <input class="input" id="mr" inputmode="numeric" placeholder="irpm" />
             <label class="check"><input type="checkbox" id="mrPrej" /> <span>Prejudicada</span></label>
           </div>
-
-          <div class="card">
-            <div class="title">Temperatura</div>
-            <input class="input" id="temperatura" inputmode="decimal" placeholder="°C" />
-          </div>
         </div>
 
         ${field("Glasgow", `
@@ -745,35 +583,9 @@ function renderEval(app, dayId, evId){
             ${Array.from({length:15},(_,i)=>15-i).map(n=>`<option value="${n}">${n}</option>`).join("")}
           </select>
         `)}
-
-        <div class="card">
-          <div class="title">Pupilas</div>
-          ${field("Tipo de pupila", `
-            <select class="input" id="pupilaTipo">
-              <option value="">Selecione…</option>
-              <option value="isocorica">Isocórica</option>
-              <option value="miotica">Miotica</option>
-              <option value="midriatica">Midriatica</option>
-              <option value="anisocorica">Anisocórica</option>
-            </select>
-          `)}
-          <label class="check"><input type="checkbox" id="pupilaReagente" /> <span>Reagente</span></label>
-          <div id="pupilaLadosWrap" style="display:none; margin-top:8px">
-            <div class="muted" style="margin-bottom:6px">Informe o lado reagente:</div>
-            <label class="check"><input type="checkbox" id="pupilaEsquerda" /> <span>Esquerda</span></label>
-            <label class="check"><input type="checkbox" id="pupilaDireita" /> <span>Direita</span></label>
-          </div>
-        </div>
       `)}
 
       ${section("4) Evolução", `
-        <div class="grid2">
-          ${Object.entries(PROCEDIMENTO_LABELS).map(([key,label]) => `
-            <div class="card">
-              <label class="check" style="margin-top:0"><input type="checkbox" id="proc_${key}" /> <span>${label}</span></label>
-            </div>
-          `).join("")}
-        </div>
         ${field("Evolução", `<textarea class="textarea" id="casoClinico" rows="6" placeholder="Descreva a evolução (o campo cresce conforme você digita)…"></textarea>`)}
       `)}
 
@@ -841,12 +653,7 @@ function renderEval(app, dayId, evId){
   $("#mr").value = ev.vitais?.mr?.valor||"";
   $("#mrPrej").checked = !!ev.vitais?.mr?.prejudicada;
 
-  $("#temperatura").value = ev.vitais?.temperatura||"";
   $("#glasgow").value = ev.vitais?.glasgow||"";
-  $("#pupilaTipo").value = ev.vitais?.pupila?.tipo||"";
-  $("#pupilaReagente").checked = !!ev.vitais?.pupila?.reagente;
-  $("#pupilaEsquerda").checked = !!ev.vitais?.pupila?.esquerda;
-  $("#pupilaDireita").checked = !!ev.vitais?.pupila?.direita;
   $("#senha").value = ev.regulacao?.senha||"";
   $("#fav_regulador_input").value = ev.regulacao?.regulador||"";
   $("#fav_unidade_input").value = ev.regulacao?.unidade||"";
@@ -859,16 +666,6 @@ function renderEval(app, dayId, evId){
   $("#admNome").value = adm.nome || "";
   setAdmButtons(adm.tipo || "");
   setGeneroButtons(adm.genero || "");
-
-  Object.keys(PROCEDIMENTO_LABELS).forEach(key=>{
-    const el = document.getElementById(`proc_${key}`);
-    if(el) el.checked = !!ev.procedimentos?.[key];
-  });
-
-  const syncPupilaUI = ()=>{
-    $("#pupilaLadosWrap").style.display = $("#pupilaReagente").checked ? "block" : "none";
-  };
-  syncPupilaUI();
 
   // Keep a fresh draft baseline after setting UI
   draft = safeClone(getEval(getDay(dayId), evId) || ev);
@@ -893,11 +690,7 @@ function renderEval(app, dayId, evId){
     }
   });
 
-  $("#protocolo").addEventListener("input", e=>{
-    const valor = sanitizeInteger(e.target.value, 30);
-    e.target.value = valor;
-    apply(n=>{ n.protocolo=valor; });
-  });
+  $("#protocolo").addEventListener("input", e=>apply(n=>{ n.protocolo=e.target.value; }));
   $("#nome").addEventListener("input", e=>apply(n=>{ n.pessoa.nome=e.target.value; }));
   $("#endereco").addEventListener("input", e=>apply(n=>{ n.endereco=e.target.value; }));
   $("#casoClinico").addEventListener("input", e=>apply(n=>{ n.casoClinico=e.target.value; }));
@@ -971,38 +764,7 @@ function renderEval(app, dayId, evId){
   $("#mr").addEventListener("input", e=>apply(n=>{ n.vitais.mr.valor=e.target.value; }));
   $("#mrPrej").addEventListener("change", e=>{ apply(n=>{ n.vitais.mr.prejudicada=e.target.checked; }); syncPrej(); });
 
-  $("#temperatura").addEventListener("input", e=>{
-    const valor = sanitizeDecimal(e.target.value, 6);
-    e.target.value = valor;
-    apply(n=>{ n.vitais.temperatura=valor; });
-  });
-
   $("#glasgow").addEventListener("change", e=>apply(n=>{ n.vitais.glasgow=e.target.value; }));
-  $("#pupilaTipo").addEventListener("change", e=>apply(n=>{ n.vitais.pupila.tipo=e.target.value; }));
-  $("#pupilaReagente").addEventListener("change", e=>{
-    const checked = e.target.checked;
-    if(!checked){
-      $("#pupilaEsquerda").checked = false;
-      $("#pupilaDireita").checked = false;
-    }
-    apply(n=>{
-      n.vitais.pupila.reagente=checked;
-      if(!checked){
-        n.vitais.pupila.esquerda=false;
-        n.vitais.pupila.direita=false;
-      }
-    });
-    syncPupilaUI();
-  });
-  $("#pupilaEsquerda").addEventListener("change", e=>apply(n=>{ n.vitais.pupila.esquerda=e.target.checked; }));
-  $("#pupilaDireita").addEventListener("change", e=>apply(n=>{ n.vitais.pupila.direita=e.target.checked; }));
-
-  Object.keys(PROCEDIMENTO_LABELS).forEach(key=>{
-    const el = document.getElementById(`proc_${key}`);
-    if(el){
-      el.addEventListener("change", e=>apply(n=>{ n.procedimentos[key]=e.target.checked; }));
-    }
-  });
 
   // favorites + regulacao
   wireFavoriteField("regulador", "reguladores",
@@ -1098,7 +860,7 @@ function renderEval(app, dayId, evId){
     el.addEventListener("input", ()=>markFilled(el));
     el.addEventListener("change", ()=>markFilled(el));
   });
-  ["paPrej","fcPrej","spo2Prej","mrPrej","pupilaReagente", ...Object.keys(PROCEDIMENTO_LABELS).map(key=>`proc_${key}`)].forEach(id=>{
+  ["paPrej","fcPrej","spo2Prej","mrPrej"].forEach(id=>{
     const chk = document.getElementById(id);
     if(chk){
       markCardFilledFromCheckbox(chk);
@@ -1186,6 +948,45 @@ function wireHoldToDelete(onConfirm){
   });
   ["pointerup","pointerleave","pointercancel"].forEach(evt=>btn.addEventListener(evt, stop));
 }
+function getProtocolosDoDia(day){
+  return (day?.evaluations||[])
+    .map(ev => String(ev?.protocolo||"").trim())
+    .filter(Boolean);
+}
+
+function showProtocolosModal(protocolos){
+  const text = protocolos.join("\n");
+  const modal = openModal(`
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <div class="modal-title">Todos os protocolos</div>
+        <button class="btn ghost" id="closeProtocols" type="button">✕</button>
+      </div>
+      <div class="modal-body">
+        <textarea class="textarea" id="protocolosTA" rows="14" readonly>${escapeHTML(text)}</textarea>
+        <div class="muted" style="margin-top:8px">Cada protocolo fica em uma linha para facilitar colar em outro local.</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn ghost" id="fecharProtocols" type="button">Fechar</button>
+        <button class="btn primary" id="copyProtocols" type="button">Copiar</button>
+      </div>
+    </div>
+  `);
+  modal.querySelector("#closeProtocols").onclick = ()=>closeModal(modal);
+  modal.querySelector("#fecharProtocols").onclick = ()=>closeModal(modal);
+  modal.querySelector("#copyProtocols").onclick = async ()=>{
+    const ta = modal.querySelector("#protocolosTA");
+    try{
+      await navigator.clipboard.writeText(ta.value);
+      setToast("Protocolos copiados.");
+    }catch{
+      ta.focus(); ta.select();
+      document.execCommand("copy");
+      setToast("Protocolos copiados.");
+    }
+  };
+}
+
 
 function showResumoModal(day, ev){
   const text = generateResumo(day, ev);
