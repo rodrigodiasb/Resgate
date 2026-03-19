@@ -229,7 +229,7 @@ function normalizeState(state){
       unidades: state?.favorites?.unidades || []
     }
   };
-  next.version = 9;
+  next.version = 10;
   next.days = (state?.days || []).map(day => ({
     ...day,
     evaluations: (day.evaluations || []).map(ensureEvaluationShape)
@@ -237,7 +237,6 @@ function normalizeState(state){
   return next;
 }
 
-let STATE = defaultState();
 let STATE = defaultState();
 let HYDRATED = false;
 
@@ -250,7 +249,7 @@ async function init(){
   const loaded = await loadState();
   if(loaded){
     STATE = normalizeState(loaded);
-    if((loaded.version || 0) < 9) saveState(STATE).catch(()=>{});
+    if((loaded.version || 0) < 10) saveState(STATE).catch(()=>{});
   }else{
     STATE = defaultState();
   }
